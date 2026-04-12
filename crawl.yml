@@ -1,0 +1,45 @@
+name: 中古車価格クローラー
+
+on:
+  schedule:
+    # 毎日日本時間 午前2時に実行（UTC 17:00）
+    - cron: '0 17 * * *'
+  # 手動実行も可能
+  workflow_dispatch:
+    inputs:
+      start_page:
+        description: '開始ページ（省略時は自動）'
+        required: false
+        default: ''
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # 最大5時間50分
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Node.jsをセットアップ
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 依存関係をインストール
+        run: npm install
+
+      - name: クローラーを実行
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          START_PAGE: ${{ github.event.inputs.start_page }}
+        run: node crawler.js
+
+      - name: 実行結果をコミット（進捗保存）
+        run: |
+          git config --local user.email "crawler@github-actions"
+          git config --local user.name "GitHub Actions"
+          git add progress.json || true
+          git diff --staged --quiet || git commit -m "クローラー進捗更新 $(date '+%Y-%m-%d %H:%M')"
+          git push || true

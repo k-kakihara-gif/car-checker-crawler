@@ -1,0 +1,10 @@
+{
+  "name": "car-checker-crawler",
+  "version": "1.0.0",
+  "description": "カーセンサー価格収集クローラー",
+  "type": "module",
+  "main": "crawler.js",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0"
+  }
+}
