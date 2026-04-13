@@ -2,9 +2,7 @@ name: 中古車価格クローラー
 
 on:
   schedule:
-    # 毎日日本時間 午前2時に実行（UTC 17:00）
     - cron: '0 17 * * *'
-  # 手動実行も可能
   workflow_dispatch:
     inputs:
       start_page:
@@ -12,14 +10,19 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write
+
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # 最大5時間50分
+    timeout-minutes: 350
 
     steps:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Node.jsをセットアップ
         uses: actions/setup-node@v4
@@ -40,6 +43,6 @@ jobs:
         run: |
           git config --local user.email "crawler@github-actions"
           git config --local user.name "GitHub Actions"
-          git add progress.json || true
-          git diff --staged --quiet || git commit -m "クローラー進捗更新 $(date '+%Y-%m-%d %H:%M')"
-          git push || true
+          git add progress.json
+          git diff --staged --quiet || git commit -m "進捗更新 $(date '+%Y-%m-%d %H:%M')"
+          git push
