@@ -1,6 +1,7 @@
 // crawler.js
 // カーセンサー全ページを巡回して価格を収集する
 // GitHub Actionsで毎日実行・前回の続きから再開
+// ※車両本体価格を取得
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -10,21 +11,15 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// =============================
-// 設定
-// =============================
 const CONFIG = {
   baseUrl: "https://www.carsensor.net/usedcar/search.php",
-  params: "STID=CS210610&SORT=2",  // 新着順・全車種
+  params: "STID=CS210610&SORT=2",
   totalPages: 17570,
-  intervalMs: 4000,      // 1リクエストごとに4秒待機
-  maxMinutes: 330,       // 最大5時間30分で自動停止（Actionsの制限に余裕を持たせる）
+  intervalMs: 4000,
+  maxMinutes: 330,
   progressFile: "progress.json",
 };
 
-// =============================
-// 進捗ファイルの読み書き
-// =============================
 function loadProgress() {
   if (existsSync(CONFIG.progressFile)) {
     try {
@@ -43,21 +38,17 @@ function saveProgress(lastPage, totalSaved) {
   );
 }
 
-// =============================
-// 指定ミリ秒待機
-// =============================
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // =============================
-// HTMLから車両情報を抽出
+// HTMLから車両情報を抽出（本体価格を取得）
 // =============================
 function parseHtml(html) {
   const cars = [];
   const seen = new Set();
 
-  // 車両詳細URLからIDを取得
   const linkPattern = /href="(\/usedcar\/detail\/[^"]+)"/g;
   let match;
   while ((match = linkPattern.exec(html)) !== null) {
@@ -66,24 +57,38 @@ function parseHtml(html) {
     if (idMatch && !seen.has(idMatch[1])) {
       seen.add(idMatch[1]);
 
-      // このIDの近くにある価格を探す
       const pos = match.index;
-      const nearby = html.slice(pos, pos + 2000);
-      const priceMatch = nearby.match(/([\d,]+\.?\d*)\s*万円/);
-      if (priceMatch) {
-        const price = parseFloat(priceMatch[1].replace(",", ""));
-        if (price >= 1 && price <= 10000) {
-          cars.push({ car_id: "CS-" + idMatch[1], price });
+      const nearby = html.slice(pos, pos + 3000);
+
+      // 本体価格を優先して取得
+      // カーセンサーのHTML構造：「車両本体価格」の後に価格が来る
+      let price = null;
+
+      // パターン1: 「本体」「車両本体価格」の近くの価格
+      const bodyPriceMatch = nearby.match(/(?:車両本体価格|本体価格|honten)[^>]*?>?\s*([\d,]+\.?\d*)\s*万円/);
+      if (bodyPriceMatch) {
+        price = parseFloat(bodyPriceMatch[1].replace(",", ""));
+      }
+
+      // パターン2: 2つ目の価格（1つ目=支払総額、2つ目=本体価格）
+      if (!price) {
+        const allPrices = [...nearby.matchAll(/([\d,]+\.?\d*)\s*万円/g)];
+        if (allPrices.length >= 2) {
+          // 2番目の価格が本体価格である場合が多い
+          price = parseFloat(allPrices[1][1].replace(",", ""));
+        } else if (allPrices.length === 1) {
+          price = parseFloat(allPrices[0][1].replace(",", ""));
         }
+      }
+
+      if (price && price >= 1 && price <= 10000) {
+        cars.push({ car_id: "CS-" + idMatch[1], price });
       }
     }
   }
   return cars;
 }
 
-// =============================
-// 1ページ取得
-// =============================
 async function fetchPage(page) {
   const url = `${CONFIG.baseUrl}?${CONFIG.params}&PAGE=${page}`;
   try {
@@ -106,9 +111,6 @@ async function fetchPage(page) {
   }
 }
 
-// =============================
-// DBに保存（今日分は更新）
-// =============================
 async function saveToDb(car_id, price) {
   const today = new Date().toISOString().split("T")[0];
   const { data: existing } = await supabase
@@ -126,16 +128,11 @@ async function saveToDb(car_id, price) {
   }
 }
 
-// =============================
-// メイン処理
-// =============================
 async function main() {
   const progress = loadProgress();
   const startTime = Date.now();
   const maxMs = CONFIG.maxMinutes * 60 * 1000;
 
-  // 開始ページの決定
-  // 全ページ完了していたら最初に戻る
   let startPage = progress.lastPage + 1;
   if (startPage > CONFIG.totalPages) {
     console.log("全ページ完了済み。最初から再開します。");
@@ -143,13 +140,11 @@ async function main() {
     progress.totalSaved = 0;
   }
 
-  // 手動指定があればそちらを優先
   if (process.env.START_PAGE && !isNaN(parseInt(process.env.START_PAGE))) {
     startPage = parseInt(process.env.START_PAGE);
   }
 
   console.log(`開始ページ: ${startPage} / ${CONFIG.totalPages}`);
-  console.log(`最大実行時間: ${CONFIG.maxMinutes}分`);
 
   let totalSaved = progress.totalSaved || 0;
   let currentPage = startPage;
@@ -157,18 +152,15 @@ async function main() {
   for (let page = startPage; page <= CONFIG.totalPages; page++) {
     currentPage = page;
 
-    // 時間制限チェック
     const elapsed = Date.now() - startTime;
     if (elapsed >= maxMs) {
       console.log(`時間制限（${CONFIG.maxMinutes}分）に達しました。${page}ページで停止。`);
       break;
     }
 
-    // ページ取得
     const cars = await fetchPage(page);
     console.log(`ページ ${page}/${CONFIG.totalPages}: ${cars.length}件`);
 
-    // DB保存
     for (const car of cars) {
       try {
         await saveToDb(car.car_id, car.price);
@@ -178,18 +170,15 @@ async function main() {
       }
     }
 
-    // 進捗保存（10ページごと）
     if (page % 10 === 0) {
       saveProgress(page, totalSaved);
       const elapsedMin = Math.floor(elapsed / 60000);
       console.log(`進捗: ${page}/${CONFIG.totalPages}ページ, ${totalSaved}件保存, ${elapsedMin}分経過`);
     }
 
-    // 待機
     await sleep(CONFIG.intervalMs);
   }
 
-  // 最終進捗保存
   saveProgress(currentPage, totalSaved);
   console.log(`完了: ${currentPage}ページまで処理, 合計${totalSaved}件保存`);
 }
