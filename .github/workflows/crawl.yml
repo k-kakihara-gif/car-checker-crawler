@@ -1,5 +1,4 @@
 name: 中古車価格クローラー
-
 on:
   schedule:
     - cron: '0 17 * * *'
@@ -9,36 +8,47 @@ on:
         description: '開始ページ（省略時は自動）'
         required: false
         default: ''
-
 permissions:
   contents: write
-
 jobs:
   crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 350
-
     steps:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Node.jsをセットアップ
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: 依存関係をインストール
         run: npm install
-
-      - name: クローラーを実行
+      - name: クローラーを実行（デバッグ版）
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           START_PAGE: ${{ github.event.inputs.start_page }}
-        run: node crawler.js
-
+        run: |
+          cat << 'JSEOF' > debug_run.js
+          import { writeFileSync } from "fs";
+          const res = await fetch("https://www.carsensor.net/usedcar/index.html", {
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36", "Accept-Language": "ja" }
+          });
+          const html = await res.text();
+          console.log("サイズ:", html.length);
+          const m = html.match(/id="([A-Z]{2}\d{6,12})_cas"/);
+          if (m) {
+            const idx = html.indexOf(m[0]);
+            const block = html.slice(idx, idx + 1500);
+            const bIdx = block.indexOf('basePrice');
+            console.log("ID:", m[1]);
+            console.log("basePrice周辺:", bIdx >= 0 ? block.slice(bIdx, bIdx + 200) : "見つからない");
+            console.log("block先頭:", block.slice(0, 300));
+          }
+          JSEOF
+          node --input-type=module < debug_run.js
       - name: 実行結果をコミット（進捗保存）
         run: |
           git config --local user.email "crawler@github-actions"
