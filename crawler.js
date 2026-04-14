@@ -70,12 +70,15 @@ function parseHtml(html) {
     let price = null;
 
     // パターン1: basePrice__mainPriceNum（本体価格）
-    const basePriceMatch = block.match(/basePrice__mainPriceNum[^>]*>(\d+(?:\.\d+)?)<\/span>/);
-    if (basePriceMatch) {
-      const val = parseFloat(basePriceMatch[1]);
-      // 単位が「円」でも数字は万円単位（カーセンサーの仕様）
-      // 1は価格非公開なのでスキップ
-      if (val > 1) {
+    // 整数部: <span class="basePrice__mainPriceNum">8</span>
+    // 小数部: <span class="basePrice__subPriceNum">.8</span>（任意）
+    const basePriceMainMatch = block.match(/basePrice__mainPriceNum[^>]*>(\d+)<\/span>/);
+    if (basePriceMainMatch) {
+      let intPart = parseFloat(basePriceMainMatch[1]);
+      const basePriceSubMatch = block.match(/basePrice__subPriceNum[^>]*>(\.\d+)<\/span>/);
+      const subPart = basePriceSubMatch ? parseFloat(basePriceSubMatch[1]) : 0;
+      const val = intPart + subPart;
+      if (val >= 2) {
         price = val;
       }
     }
