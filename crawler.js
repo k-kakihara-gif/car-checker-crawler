@@ -1,7 +1,6 @@
 // crawler.js
 // カーセンサー全ページを巡回して価格を収集する
 // GitHub Actionsで毎日実行・前回の続きから再開
-// ※ボット対策・本体価格取得
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -39,7 +38,6 @@ function saveProgress(lastPage, totalSaved) {
   );
 }
 
-// ランダムな待機時間
 function randomSleep() {
   const ms = CONFIG.minIntervalMs + Math.random() * (CONFIG.maxIntervalMs - CONFIG.minIntervalMs);
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,68 +45,71 @@ function randomSleep() {
 
 // =============================
 // HTMLから車両情報を抽出
+// カーセンサーのHTML構造:
+// <div class="cassette" id="AU2311262168_cas">
+// <a href="/usedcar/detail/AU2311262168/index.html">
 // =============================
 function parseHtml(html) {
   const cars = [];
   const seen = new Set();
 
-  // パターン1: /usedcar/detail/XXXX/
-  const pattern1 = /\/usedcar\/detail\/([A-Z0-9][A-Z0-9\-]{3,30})\//g;
-  // パターン2: detail?STID=CS&ID=XXXX
-  const pattern2 = /[?&]ID=([A-Z0-9\-]{5,30})/g;
-  // パターン3: data-carid="XXXX"
-  const pattern3 = /data-carid="([^"]+)"/g;
-  // パターン4: data-id="XXXX"
-  const pattern4 = /data-id="([A-Z0-9\-]{5,30})"/g;
+  // カセット（車両カード）を全て抽出
+  // id="XXXXXXXX_cas" パターンで車両IDを取得
+  const cassettePattern = /id="([A-Z]{2}\d{6,12})_cas"/g;
+  let match;
 
-  const allPatterns = [pattern1, pattern2, pattern3, pattern4];
+  while ((match = cassettePattern.exec(html)) !== null) {
+    const id = match[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
 
-  for (const pattern of allPatterns) {
-    let match;
-    while ((match = pattern.exec(html)) !== null) {
-      const id = match[1];
-      if (seen.has(id)) continue;
-      if (id.length < 5 || id.length > 30) continue;
+    // このカセットの範囲のHTMLを取得（次のカセットまで）
+    const start = match.index;
+    const nextCassette = html.indexOf('_cas"', start + 10);
+    const end = nextCassette > 0 ? Math.min(nextCassette + 500, start + 5000) : start + 5000;
+    const block = html.slice(start, end);
 
-      seen.add(id);
+    // 本体価格を取得
+    let price = null;
 
-      const pos = match.index;
-      const nearby = html.slice(Math.max(0, pos - 500), pos + 3000);
+    // パターン1: 「車両本体価格」ラベルの後
+    const bodyMatch = block.match(/車両本体価格[^<]*<[^>]*>\s*([\d,]+\.?\d*)\s*万円/);
+    if (bodyMatch) {
+      price = parseFloat(bodyMatch[1].replace(",", ""));
+    }
 
-      let price = null;
-
-      // 本体価格を優先
-      const bodyMatch = nearby.match(/(?:車両本体価格|本体価格)[^\d]*([\d,]+\.?\d*)\s*万円/);
-      if (bodyMatch) {
-        price = parseFloat(bodyMatch[1].replace(",", ""));
+    // パターン2: cassetteMain__price--body クラス
+    if (!price) {
+      const classMatch = block.match(/price--body[^>]*>[^<]*([\d,]+\.?\d*)\s*万円/);
+      if (classMatch) {
+        price = parseFloat(classMatch[1].replace(",", ""));
       }
+    }
 
-      // 2番目の価格（支払総額の次が本体価格）
-      if (!price) {
-        const allPrices = [...nearby.matchAll(/([\d,]+\.?\d*)\s*万円/g)];
-        if (allPrices.length >= 2) {
-          price = parseFloat(allPrices[1][1].replace(",", ""));
-        } else if (allPrices.length === 1) {
-          price = parseFloat(allPrices[0][1].replace(",", ""));
-        }
+    // パターン3: 2番目の価格（1番目=支払総額、2番目=本体価格）
+    if (!price) {
+      const allPrices = [...block.matchAll(/([\d,]+\.?\d*)\s*万円/g)];
+      if (allPrices.length >= 2) {
+        price = parseFloat(allPrices[1][1].replace(",", ""));
+      } else if (allPrices.length === 1) {
+        price = parseFloat(allPrices[0][1].replace(",", ""));
       }
+    }
 
-      if (price && price >= 1 && price <= 10000) {
-        cars.push({ car_id: "CS-" + id, price });
-      }
+    if (price && price >= 1 && price <= 10000) {
+      cars.push({ car_id: "CS-" + id, price });
+    } else if (!price) {
+      // 価格なしでもIDは保存（価格不明として記録）
+      console.log(`  価格なし: ${id}`);
     }
   }
 
   return cars;
 }
 
-// =============================
-// ページ取得（リトライあり）
-// =============================
 async function fetchPage(page, retryCount = 0) {
   const url = `${CONFIG.baseUrl}?${CONFIG.params}&PAGE=${page}`;
 
-  // ランダムなUser-Agentを使用
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -134,7 +135,6 @@ async function fetchPage(page, retryCount = 0) {
     });
 
     if (res.status === 429 || res.status === 503) {
-      // レート制限 → 長めに待ってリトライ
       if (retryCount < 3) {
         console.warn(`ページ${page}: ${res.status} → 30秒待ってリトライ (${retryCount + 1}/3)`);
         await new Promise(r => setTimeout(r, 30000));
@@ -150,27 +150,22 @@ async function fetchPage(page, retryCount = 0) {
 
     const html = await res.text();
 
-    // ボット対策で空ページが返された場合
     if (html.length < 5000) {
-      console.warn(`ページ${page}: HTMLが短すぎる (${html.length}bytes) → スキップ`);
+      console.warn(`ページ${page}: HTMLが短すぎる (${html.length}bytes)`);
       return [];
     }
 
-    const cars = parseHtml(html);
-    return cars;
+    return parseHtml(html);
   } catch (e) {
-    console.warn(`ページ${page}: 取得失敗 - ${e.message}`);
     if (retryCount < 2) {
       await new Promise(r => setTimeout(r, 10000));
       return fetchPage(page, retryCount + 1);
     }
+    console.warn(`ページ${page}: 取得失敗 - ${e.message}`);
     return [];
   }
 }
 
-// =============================
-// DBに保存
-// =============================
 async function saveToDb(car_id, price) {
   const today = new Date().toISOString().split("T")[0];
   const { data: existing } = await supabase
@@ -188,9 +183,6 @@ async function saveToDb(car_id, price) {
   }
 }
 
-// =============================
-// メイン処理
-// =============================
 async function main() {
   const progress = loadProgress();
   const startTime = Date.now();
@@ -211,7 +203,7 @@ async function main() {
 
   let totalSaved = progress.totalSaved || 0;
   let currentPage = startPage;
-  let zeroCount = 0; // 連続0件カウント
+  let zeroCount = 0;
 
   for (let page = startPage; page <= CONFIG.totalPages; page++) {
     currentPage = page;
@@ -227,7 +219,6 @@ async function main() {
 
     if (cars.length === 0) {
       zeroCount++;
-      // 連続10ページ0件なら少し長めに待つ
       if (zeroCount >= 10) {
         console.log(`連続${zeroCount}ページ0件 → 15秒待機`);
         await new Promise(r => setTimeout(r, 15000));
