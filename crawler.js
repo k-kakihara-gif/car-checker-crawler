@@ -55,7 +55,7 @@ function parseHtml(html) {
     seen.add(id);
 
     const start = m.index;
-    const block = html.slice(start, start + 5000);
+    const block = html.slice(start, start + 15000);
 
     // 整数部: basePrice__mainPriceNum
     const mainRe = /basePrice__mainPriceNum">(\d+)<\/span>/;
