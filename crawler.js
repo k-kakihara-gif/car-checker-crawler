@@ -45,16 +45,17 @@ function randomSleep() {
 
 // =============================
 // HTMLから車両情報を抽出
-// カーセンサーのHTML構造:
-// <div class="cassette" id="AU2311262168_cas">
-// <a href="/usedcar/detail/AU2311262168/index.html">
+// カーセンサーの構造:
+// <div id="AU2311262168_cas">  ← 車両ID
+// <span class="basePrice__mainPriceNum">293</span>  ← 本体価格（万円）
+// <span class="basePrice__unit">万円</span> or 円
+// <span class="totalPrice__mainPriceNum">303</span>  ← 支払総額（万円）
 // =============================
 function parseHtml(html) {
   const cars = [];
   const seen = new Set();
 
-  // カセット（車両カード）を全て抽出
-  // id="XXXXXXXX_cas" パターンで車両IDを取得
+  // カセットIDを取得: id="AU2311262168_cas"
   const cassettePattern = /id="([A-Z]{2}\d{6,12})_cas"/g;
   let match;
 
@@ -63,43 +64,45 @@ function parseHtml(html) {
     if (seen.has(id)) continue;
     seen.add(id);
 
-    // このカセットの範囲のHTMLを取得（次のカセットまで）
     const start = match.index;
-    const nextCassette = html.indexOf('_cas"', start + 10);
-    const end = nextCassette > 0 ? Math.min(nextCassette + 500, start + 5000) : start + 5000;
-    const block = html.slice(start, end);
+    const block = html.slice(start, start + 5000);
 
-    // 本体価格を取得
     let price = null;
 
-    // パターン1: 「車両本体価格」ラベルの後
-    const bodyMatch = block.match(/車両本体価格[^<]*<[^>]*>\s*([\d,]+\.?\d*)\s*万円/);
-    if (bodyMatch) {
-      price = parseFloat(bodyMatch[1].replace(",", ""));
-    }
-
-    // パターン2: cassetteMain__price--body クラス
-    if (!price) {
-      const classMatch = block.match(/price--body[^>]*>[^<]*([\d,]+\.?\d*)\s*万円/);
-      if (classMatch) {
-        price = parseFloat(classMatch[1].replace(",", ""));
+    // パターン1: basePrice__mainPriceNum（本体価格）
+    const basePriceMatch = block.match(/basePrice__mainPriceNum[^>]*>(\d+(?:\.\d+)?)<\/span>/);
+    if (basePriceMatch) {
+      const val = parseFloat(basePriceMatch[1]);
+      // 単位確認（万円 or 円）
+      const unitMatch = block.match(/basePrice__unit[^>]*>([^<]+)<\/span>/);
+      if (unitMatch && unitMatch[1].includes('円') && !unitMatch[1].includes('万')) {
+        // 円単位の場合は万円に変換
+        price = val / 10000;
+      } else {
+        price = val;
       }
     }
 
-    // パターン3: 2番目の価格（1番目=支払総額、2番目=本体価格）
+    // パターン2: basePrice の近くの数字
     if (!price) {
-      const allPrices = [...block.matchAll(/([\d,]+\.?\d*)\s*万円/g)];
-      if (allPrices.length >= 2) {
-        price = parseFloat(allPrices[1][1].replace(",", ""));
-      } else if (allPrices.length === 1) {
-        price = parseFloat(allPrices[0][1].replace(",", ""));
+      const basePriceBlock = block.match(/class="basePrice"[^]*?class="basePrice__content"[^]*?(\d+(?:\.\d+)?)/);
+      if (basePriceBlock) {
+        price = parseFloat(basePriceBlock[1]);
+      }
+    }
+
+    // パターン3: totalPrice__mainPriceNum（支払総額）をフォールバック
+    if (!price) {
+      const totalPriceMatch = block.match(/totalPrice__mainPriceNum[^>]*>(\d+(?:\.\d+)?)<\/span>/);
+      if (totalPriceMatch) {
+        price = parseFloat(totalPriceMatch[1]);
       }
     }
 
     if (price && price >= 1 && price <= 10000) {
       cars.push({ car_id: "CS-" + id, price });
-    } else if (!price) {
-      // 価格なしでもIDは保存（価格不明として記録）
+      console.log(`  取得: ${id} = ${price}万円`);
+    } else {
       console.log(`  価格なし: ${id}`);
     }
   }
@@ -136,7 +139,7 @@ async function fetchPage(page, retryCount = 0) {
 
     if (res.status === 429 || res.status === 503) {
       if (retryCount < 3) {
-        console.warn(`ページ${page}: ${res.status} → 30秒待ってリトライ (${retryCount + 1}/3)`);
+        console.warn(`ページ${page}: ${res.status} → 30秒待ってリトライ`);
         await new Promise(r => setTimeout(r, 30000));
         return fetchPage(page, retryCount + 1);
       }
@@ -149,7 +152,6 @@ async function fetchPage(page, retryCount = 0) {
     }
 
     const html = await res.text();
-
     if (html.length < 5000) {
       console.warn(`ページ${page}: HTMLが短すぎる (${html.length}bytes)`);
       return [];
