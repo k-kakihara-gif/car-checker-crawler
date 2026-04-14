@@ -73,12 +73,9 @@ function parseHtml(html) {
     const basePriceMatch = block.match(/basePrice__mainPriceNum[^>]*>(\d+(?:\.\d+)?)<\/span>/);
     if (basePriceMatch) {
       const val = parseFloat(basePriceMatch[1]);
-      // 単位確認（万円 or 円）
-      const unitMatch = block.match(/basePrice__unit[^>]*>([^<]+)<\/span>/);
-      if (unitMatch && unitMatch[1].includes('円') && !unitMatch[1].includes('万')) {
-        // 円単位の場合は万円に変換
-        price = val / 10000;
-      } else {
+      // 単位が「円」でも数字は万円単位（カーセンサーの仕様）
+      // 1は価格非公開なのでスキップ
+      if (val > 1) {
         price = val;
       }
     }
