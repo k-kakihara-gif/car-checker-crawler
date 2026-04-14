@@ -11,8 +11,8 @@ const supabase = createClient(
 );
 
 const CONFIG = {
-  baseUrl: "https://www.carsensor.net/usedcar/search.php",
-  params: "STID=CS210610&SORT=2",
+  baseUrl: "https://www.carsensor.net/usedcar/index",
+  params: "",
   totalPages: 17570,
   minIntervalMs: 3000,
   maxIntervalMs: 7000,
@@ -111,7 +111,9 @@ function parseHtml(html) {
 }
 
 async function fetchPage(page, retryCount = 0) {
-  const url = `${CONFIG.baseUrl}?${CONFIG.params}&PAGE=${page}`;
+  // URL形式: index.html(1ページ目), index2.html(2ページ目), ...
+  const suffix = page === 1 ? ".html" : `${page}.html`;
+  const url = `${CONFIG.baseUrl}${suffix}`;
 
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
