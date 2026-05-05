@@ -1,6 +1,9 @@
 // crawler.js
 // カーセンサー全ページを巡回して価格を収集する
 
+import WebSocket from "ws";
+globalThis.WebSocket = WebSocket;
+
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 
