@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
+  process.env.SUPABASE_KEY,
+  { realtime: false, auth: { persistSession: false } }
 );
 
 const CONFIG = {
