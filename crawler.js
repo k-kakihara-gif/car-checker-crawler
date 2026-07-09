@@ -81,13 +81,51 @@ function parseHtml(html) {
     // 1円は価格非公開
     if (price >= 2 && price <= 10000) {
       console.log("  取得: " + id + " = " + price + "万円");
-      cars.push({ car_id: "CS-" + id, price });
+      cars.push({ car_id: "CS-" + id, price, listing: parseListing(id, block, price) });
     } else {
       console.log("  価格なし: " + id + " (value=" + price + ")");
     }
   }
 
   return cars;
+}
+
+// 一覧ページのブロックから車両属性（車名・グレード・年式・走行距離・総額・修復歴）を抽出
+function parseListing(id, block, price) {
+  const makerM = /<p>([^<]{1,20})<\/p>\s*<h3 class="cassetteMain__title"/.exec(block);
+  const titleM = /cassetteMain__link[^"]*"[^>]*>([^<]+)<\/a>/.exec(block);
+  const totalM = /totalPrice__mainPriceNum">([\d,]+)</.exec(block);
+  const totalSubM = /totalPrice__subPriceNum">([\.\d]+)</.exec(block);
+  const yearM = /specList__emphasisData">(\d{4})<\/span><span class="specList__jpYear"/.exec(block);
+  const mileM = /走行距離<\/dt>\s*<dd class="specList__data"><span class="specList__emphasisData">([\d.]+)<\/span>万km/.exec(block);
+  const repairM = /修復歴<\/dt>\s*<dd class="specList__data">([^<]+)</.exec(block);
+
+  let model = null;
+  let grade = null;
+  if (titleM) {
+    const parts = titleM[1].split("&nbsp;");
+    model = parts[0].trim();
+    grade = (parts[1] || "").trim();
+  }
+
+  let totalPrice = null;
+  if (totalM) {
+    totalPrice = parseFloat(totalM[1].replace(/,/g, "") + (totalSubM ? totalSubM[1] : ""));
+  }
+
+  return {
+    car_id: "CS-" + id,
+    maker: makerM ? makerM[1].trim() : null,
+    model,
+    grade,
+    year: yearM ? parseInt(yearM[1], 10) : null,
+    mileage_km: mileM ? Math.round(parseFloat(mileM[1]) * 10000) : null,
+    price_man: price,
+    total_price_man: totalPrice,
+    repair: repairM ? repairM[1].trim() : null,
+    url: "https://www.carsensor.net/usedcar/detail/" + id + "/index.html",
+    last_seen_at: new Date().toISOString(),
+  };
 }
 
 async function fetchPage(page, retryCount = 0) {
@@ -154,6 +192,11 @@ async function saveToDb(car_id, price) {
   }
 }
 
+async function saveListing(listing) {
+  if (!listing.model || !listing.year) return; // 属性が取れないものはスキップ
+  await supabase.from("car_listings").upsert(listing, { onConflict: "car_id" });
+}
+
 async function main() {
   const progress = loadProgress();
   const startTime = Date.now();
@@ -202,6 +245,11 @@ async function main() {
           totalSaved++;
         } catch (e) {
           console.warn("保存失敗: " + car.car_id);
+        }
+        try {
+          await saveListing(car.listing);
+        } catch (e) {
+          console.warn("listing保存失敗: " + car.car_id);
         }
       }
     }
