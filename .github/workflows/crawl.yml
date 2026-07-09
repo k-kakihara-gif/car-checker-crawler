@@ -8,8 +8,6 @@ on:
         description: '開始ページ（省略時は自動）'
         required: false
         default: ''
-permissions:
-  contents: write
 jobs:
   crawl:
     runs-on: ubuntu-latest
@@ -17,8 +15,6 @@ jobs:
     steps:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Node.jsをセットアップ
         uses: actions/setup-node@v4
         with:
@@ -31,10 +27,3 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           START_PAGE: ${{ github.event.inputs.start_page }}
         run: node crawler.js
-      - name: 実行結果をコミット（進捗保存）
-        run: |
-          git config --local user.email "crawler@github-actions"
-          git config --local user.name "GitHub Actions"
-          git add progress.json
-          git diff --staged --quiet || git commit -m "進捗更新 $(date '+%Y-%m-%d %H:%M')"
-          git push

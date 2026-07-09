@@ -5,7 +5,6 @@ import WebSocket from "ws";
 globalThis.WebSocket = WebSocket;
 
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync, writeFileSync, existsSync } from "fs";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -19,25 +18,34 @@ const CONFIG = {
   minIntervalMs: 3000,
   maxIntervalMs: 7000,
   maxMinutes: 330,
-  progressFile: "progress.json",
 };
 
-function loadProgress() {
-  if (existsSync(CONFIG.progressFile)) {
-    try {
-      const data = JSON.parse(readFileSync(CONFIG.progressFile, "utf8"));
-      console.log("前回の進捗: " + data.lastPage + "ページまで完了");
-      return data;
-    } catch (e) {}
+async function loadProgress() {
+  const { data, error } = await supabase
+    .from("crawler_progress")
+    .select("last_page, total_saved")
+    .eq("id", 1)
+    .single();
+  if (error || !data) {
+    console.log("進捗データなし。最初から開始します。");
+    return { lastPage: 0, totalSaved: 0 };
   }
-  return { lastPage: 0, totalSaved: 0 };
+  console.log("前回の進捗: " + data.last_page + "ページまで完了");
+  return { lastPage: data.last_page, totalSaved: data.total_saved };
 }
 
-function saveProgress(lastPage, totalSaved) {
-  writeFileSync(
-    CONFIG.progressFile,
-    JSON.stringify({ lastPage, totalSaved, updatedAt: new Date().toISOString() }, null, 2)
-  );
+async function saveProgress(lastPage, totalSaved) {
+  const { error } = await supabase
+    .from("crawler_progress")
+    .upsert({
+      id: 1,
+      last_page: lastPage,
+      total_saved: totalSaved,
+      updated_at: new Date().toISOString(),
+    });
+  if (error) {
+    console.warn("進捗保存失敗:", error.message);
+  }
 }
 
 function randomSleep() {
@@ -49,7 +57,6 @@ function parseHtml(html) {
   const cars = [];
   const seen = new Set();
 
-  // id="AU1234567890_cas" パターンで車両IDを取得
   const re = /id="([A-Z]{2}\d{6,12})_cas"/g;
   let m;
 
@@ -61,7 +68,6 @@ function parseHtml(html) {
     const start = m.index;
     const block = html.slice(start, start + 15000);
 
-    // 整数部: basePrice__mainPriceNum
     const mainRe = /basePrice__mainPriceNum">(\d+)<\/span>/;
     const mainM = mainRe.exec(block);
     if (!mainM) {
@@ -71,14 +77,12 @@ function parseHtml(html) {
 
     let price = parseInt(mainM[1], 10);
 
-    // 小数部: basePrice__subPriceNum（例: ".0", ".5"）
     const subRe = /basePrice__subPriceNum">([\.\d]+)<\/span>/;
     const subM = subRe.exec(block);
     if (subM) {
       price = parseFloat(price + subM[1]);
     }
 
-    // 1円は価格非公開
     if (price >= 2 && price <= 10000) {
       console.log("  取得: " + id + " = " + price + "万円");
       cars.push({ car_id: "CS-" + id, price, listing: parseListing(id, block, price) });
@@ -198,7 +202,7 @@ async function saveListing(listing) {
 }
 
 async function main() {
-  const progress = loadProgress();
+  const progress = await loadProgress();
   const startTime = Date.now();
   const maxMs = CONFIG.maxMinutes * 60 * 1000;
 
@@ -255,7 +259,7 @@ async function main() {
     }
 
     if (page % 10 === 0) {
-      saveProgress(page, totalSaved);
+      await saveProgress(page, totalSaved);
       const elapsedMin = Math.floor(elapsed / 60000);
       console.log("進捗: " + page + "/" + CONFIG.totalPages + "ページ, " + totalSaved + "件保存, " + elapsedMin + "分経過");
     }
@@ -263,7 +267,7 @@ async function main() {
     await randomSleep();
   }
 
-  saveProgress(currentPage, totalSaved);
+  await saveProgress(currentPage, totalSaved);
   console.log("完了: " + currentPage + "ページまで処理, 合計" + totalSaved + "件保存");
 }
 
